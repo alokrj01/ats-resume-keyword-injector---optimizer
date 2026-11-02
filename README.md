@@ -245,4 +245,4 @@ No open-source license has been specified yet. A license file should be added be
 
 ---
 
-**Developed by Alok Ranjan**
+**Developed with ❤️ by Alok Ranjan**

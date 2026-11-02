@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000/api/v1/resume";
+const API_BASE = `${import.meta.env.VITE_API_URL}/api/v1/resume`;
 
 export async function analyzeResumeApi(file, jdText) {
   const formData = new FormData();
