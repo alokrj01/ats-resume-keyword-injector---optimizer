@@ -13,7 +13,7 @@ app.add_middleware(
     allow_origins=[
       "http://localhost:5173",
       "http://127.0.0:5173",
-      "https://ats-resume-keyword-injector-optimizer.onrender.com",
+      "https://frontend-ats-resume-keyword-injector.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
