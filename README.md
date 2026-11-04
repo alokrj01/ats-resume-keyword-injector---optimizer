@@ -123,8 +123,8 @@ Configure your Gemini API credentials in `backend/.env`:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-3.5-flash
-GEMINI_FALLBACK_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_FALLBACK_MODEL=gemini-3.6-flash
 ```
 
 Replace the placeholder with your actual API key.
