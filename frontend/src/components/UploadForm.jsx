@@ -1,5 +1,3 @@
-import React from "react";
-
 export default function UploadForm({
   resumeFile,
   onFileChange,
@@ -7,14 +5,13 @@ export default function UploadForm({
   keepResume,
   setKeepResume,
   fileInputRef,
+  provider,
+  setProvider,
   jdText,
   setJdText,
   onAnalyze,
   loading,
 }) {
-
-
-
   return (
     <form
       onSubmit={onAnalyze}
@@ -71,20 +68,44 @@ export default function UploadForm({
 
       <div>
         <label className="block text-sm font-semibold text-slate-700 mb-2">
-          2. AI Provider
+          2. Cloud AI Provider
         </label>
-        <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-          Google Gemini
-          <p className="mt-1 text-xs text-slate-500">
-            API key and model are configured securely in the backend environment.
-          </p>
-        </div>
+        <select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+        >
+          <option value="auto">
+            Auto Failover (Qwen Cloud → Gemini Cloud)
+          </option>
+          <option value="groq">
+            Qwen 3.8 27B — GroqCloud (Free & Fastest)
+          </option>
+          <option value="openrouter">
+            Qwen Free Tier — OpenRouter Cloud
+          </option>
+          <option value="gemini">Google Gemini Cloud</option>
+        </select>
+        <p className="mt-1.5 text-xs text-slate-500">
+          100% cloud-hosted inference — zero CPU/GPU load on your machine.
+        </p>
       </div>
 
       <div>
-        <label className="block text-sm font-semibold text-slate-700 mb-2">
-          3. Target Job Description
-        </label>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-semibold text-slate-700">
+            3. Target Job Description
+          </label>
+          {jdText && (
+            <button
+              type="button"
+              onClick={() => setJdText("")}
+              className="text-xs text-slate-500 hover:text-rose-600 font-medium cursor-pointer"
+            >
+              Clear JD
+            </button>
+          )}
+        </div>
         <textarea
           rows={10}
           value={jdText}
@@ -98,9 +119,9 @@ export default function UploadForm({
       <button
         type="submit"
         disabled={loading || !resumeFile || !jdText.trim()}
-        className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-semibold rounded-lg text-sm transition"
+        className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-semibold rounded-lg text-sm transition cursor-pointer"
       >
-        {loading ? `Analyzing with Gemini...` : "Analyze & Map Keywords"}
+        {loading ? "Analyzing in Cloud..." : "Analyze & Map Keywords"}
       </button>
     </form>
   );

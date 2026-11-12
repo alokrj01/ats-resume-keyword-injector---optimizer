@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import UploadForm from "./components/UploadForm";
 import SwapPreviewList from "./components/SwapPreviewList";
 import { analyzeResumeApi, generatePdfApi } from "./api/resumeApi";
@@ -6,62 +6,97 @@ import { analyzeResumeApi, generatePdfApi } from "./api/resumeApi";
 const STORAGE_FILE_DATA = "ats_saved_resume_base64";
 const STORAGE_FILE_NAME = "ats_saved_resume_name";
 
+function sanitizeFilenameSegment(value, fallback) {
+  const printable = Array.from(String(value || ""))
+    .filter((ch) => ch.charCodeAt(0) >= 32)
+    .join("");
+  const cleaned = printable
+    .trim()
+    .replace(/[<>:"/\\|?*]+/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  return cleaned || fallback;
+}
+
+function safeClearResumeStorage() {
+  try {
+    localStorage.removeItem(STORAGE_FILE_DATA);
+    localStorage.removeItem(STORAGE_FILE_NAME);
+  } catch {
+    // Ignore SecurityError when browser blocks site storage
+  }
+}
+
+function loadSavedResumeFromStorage() {
+  if (typeof window === "undefined") return null;
+  let savedBase64;
+  let savedName;
+  try {
+    savedBase64 = localStorage.getItem(STORAGE_FILE_DATA);
+    savedName = localStorage.getItem(STORAGE_FILE_NAME);
+  } catch {
+    return null;
+  }
+  if (!savedBase64 || !savedName) return null;
+
+  try {
+    const parts = savedBase64.split(",");
+    const payload = parts.length > 1 ? parts[1] : parts[0];
+    const byteString = atob(payload);
+    const bytes = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+      bytes[i] = byteString.charCodeAt(i);
+    }
+    return new File([bytes], savedName, {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+  } catch (err) {
+    console.error("Failed to restore saved resume:", err);
+    safeClearResumeStorage();
+    return null;
+  }
+}
+
 export default function App() {
-  const [resumeFile, setResumeFile] = useState(null);
+  const [resumeFile, setResumeFile] = useState(loadSavedResumeFromStorage);
   const [keepResume, setKeepResume] = useState(true);
-  const [activeFileName, setActiveFileName] = useState("Tailored_Resume.docx");
-  const [jobMeta, setJobMeta] = useState({ title: "Role", company: "Company" });
+  const [jobMeta, setJobMeta] = useState({
+    baseName: "Tailored_Resume",
+    title: "Role",
+    company: "Company",
+  });
   const [jdText, setJdText] = useState("");
+  const [provider, setProvider] = useState("auto");
   const [sessionId, setSessionId] = useState(null);
   const [atsStats, setAtsStats] = useState(null);
   const [swaps, setSwaps] = useState([]);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
   const fileInputRef = useRef(null);
-
-  useEffect(() => {
-    const savedBase64 = localStorage.getItem(STORAGE_FILE_DATA);
-    const savedName = localStorage.getItem(STORAGE_FILE_NAME);
-    if (savedBase64 && savedName) {
-      try {
-        const byteString = atob(savedBase64.split(",")[1]);
-        const ab = new ArrayBuffer(byteString.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteString.length; i++) {
-          ia[i] = byteString.charCodeAt(i);
-        }
-        const restoredFile = new File([ab], savedName, {
-          type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        });
-        setResumeFile(restoredFile);
-        setActiveFileName(savedName);
-      } catch (err) {
-        console.error("Failed to restore saved resume:", err);
-      }
-    }
-  }, []);
 
   const saveFileToLocal = (file) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        localStorage.setItem(STORAGE_FILE_DATA, reader.result);
-        localStorage.setItem(STORAGE_FILE_NAME, file.name);
+        if (typeof reader.result === "string") {
+          localStorage.setItem(STORAGE_FILE_DATA, reader.result);
+          localStorage.setItem(STORAGE_FILE_NAME, file.name);
+        }
       } catch (e) {
-        console.warn("File too large for localStorage:", e);
+        console.warn("Unable to persist resume in localStorage:", e);
       }
     };
     reader.readAsDataURL(file);
   };
 
   const handleFileChange = (file) => {
+    setErrorMsg("");
     setResumeFile(file);
-    if (file) {
-      setActiveFileName(file.name);
-      if (keepResume) {
-        saveFileToLocal(file);
-      }
+    if (file && keepResume) {
+      saveFileToLocal(file);
     }
   };
 
@@ -70,15 +105,13 @@ export default function App() {
     if (checked && resumeFile) {
       saveFileToLocal(resumeFile);
     } else if (!checked) {
-      localStorage.removeItem(STORAGE_FILE_DATA);
-      localStorage.removeItem(STORAGE_FILE_NAME);
+      safeClearResumeStorage();
     }
   };
 
   const handleClearSavedResume = () => {
     setResumeFile(null);
-    localStorage.removeItem(STORAGE_FILE_DATA);
-    localStorage.removeItem(STORAGE_FILE_NAME);
+    safeClearResumeStorage();
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -86,36 +119,43 @@ export default function App() {
 
   const handleAnalyze = async (e) => {
     e.preventDefault();
-    if (!resumeFile) return;
+    if (!resumeFile || !jdText.trim()) return;
+
+    const currentBaseName = sanitizeFilenameSegment(
+      resumeFile.name.replace(/\.docx$/i, ""),
+      "Tailored_Resume"
+    );
+
+    setErrorMsg("");
     setLoading(true);
 
     try {
-      const data = await analyzeResumeApi(resumeFile, jdText);
+      const data = await analyzeResumeApi(resumeFile, jdText, provider);
 
       setSessionId(data.session_id);
       setJobMeta({
-        title: (data.job_title || "Role").replace(/\s+/g, "_"),
-        company: (data.company_name || "Company").replace(/\s+/g, "_"),
+        baseName: currentBaseName,
+        title: sanitizeFilenameSegment(data.job_title, "Role"),
+        company: sanitizeFilenameSegment(data.company_name, "Company"),
       });
       setAtsStats({
         before: data.ats_score_before,
         after: data.ats_score_estimated,
-        missing: data.missing_skills,
+        missing: data.missing_skills || [],
       });
       setSwaps(
-        data.swaps.map((item, idx) => ({
+        (data.swaps || []).map((item, idx) => ({
           id: idx,
           ...item,
           approved: true,
         }))
       );
 
-      setJdText("");
       if (!keepResume) {
         handleClearSavedResume();
       }
     } catch (error) {
-      alert(error.message);
+      setErrorMsg(error.message || "Failed to analyze resume.");
     } finally {
       setLoading(false);
     }
@@ -135,6 +175,7 @@ export default function App() {
 
   const handleDownload = async () => {
     if (!sessionId) return;
+    setErrorMsg("");
     setDownloading(true);
 
     const approvedMap = {};
@@ -144,15 +185,27 @@ export default function App() {
         approvedMap[s.original] = s.replacement;
       });
 
+    const fallbackBase = resumeFile?.name
+      ? sanitizeFilenameSegment(
+          resumeFile.name.replace(/\.docx$/i, ""),
+          "Tailored_Resume"
+        )
+      : "Tailored_Resume";
+    const safeBase = jobMeta.baseName || fallbackBase;
+    const downloadName = `${safeBase}_${jobMeta.title}_${jobMeta.company}.pdf`;
+
     try {
       const blob = await generatePdfApi(sessionId, approvedMap);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Alok_Ranjan_${jobMeta.title}_${jobMeta.company}_Resume.pdf`;
+      a.download = downloadName;
+      document.body.appendChild(a);
       a.click();
+      a.remove();
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     } catch (error) {
-      alert(error.message);
+      setErrorMsg(error.message || "Failed to generate PDF.");
     } finally {
       setDownloading(false);
     }
@@ -161,7 +214,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 p-6 md:p-10 text-slate-900">
       <div className="max-w-6xl mx-auto">
-        <header className="mb-8">
+        <header className="mb-6">
           <h1 className="text-2xl font-bold tracking-tight">
             ATS Resume Keyword Injector & Optimizer
           </h1>
@@ -169,6 +222,22 @@ export default function App() {
             Modular architecture — preserves 100% of your original .docx layout.
           </p>
         </header>
+
+        {errorMsg && (
+          <div
+            role="alert"
+            className="mb-6 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center justify-between gap-4"
+          >
+            <span>{errorMsg}</span>
+            <button
+              type="button"
+              onClick={() => setErrorMsg("")}
+              className="text-xs font-semibold text-rose-700 hover:text-rose-900 shrink-0 cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           <div className="lg:col-span-5">
@@ -179,6 +248,8 @@ export default function App() {
               keepResume={keepResume}
               setKeepResume={handleKeepResumeToggle}
               fileInputRef={fileInputRef}
+              provider={provider}
+              setProvider={setProvider}
               jdText={jdText}
               setJdText={setJdText}
               onAnalyze={handleAnalyze}
