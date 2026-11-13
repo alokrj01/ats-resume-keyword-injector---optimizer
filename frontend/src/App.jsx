@@ -1,7 +1,11 @@
 import { useState, useRef } from "react";
 import UploadForm from "./components/UploadForm";
 import SwapPreviewList from "./components/SwapPreviewList";
-import { analyzeResumeApi, generatePdfApi } from "./api/resumeApi";
+import {
+  analyzeResumeApi,
+  generateDocxApi,
+  generatePdfApi,
+} from "./api/resumeApi";
 
 const STORAGE_FILE_DATA = "ats_saved_resume_base64";
 const STORAGE_FILE_NAME = "ats_saved_resume_name";
@@ -60,6 +64,7 @@ function loadSavedResumeFromStorage() {
 
 export default function App() {
   const [resumeFile, setResumeFile] = useState(loadSavedResumeFromStorage);
+  const [analyzedFile, setAnalyzedFile] = useState(null);
   const [keepResume, setKeepResume] = useState(true);
   const [jobMeta, setJobMeta] = useState({
     baseName: "Tailored_Resume",
@@ -72,7 +77,7 @@ export default function App() {
   const [atsStats, setAtsStats] = useState(null);
   const [swaps, setSwaps] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [downloadFormat, setDownloadFormat] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
 
   const fileInputRef = useRef(null);
@@ -121,8 +126,9 @@ export default function App() {
     e.preventDefault();
     if (!resumeFile || !jdText.trim()) return;
 
+    const sourceFile = resumeFile;
     const currentBaseName = sanitizeFilenameSegment(
-      resumeFile.name.replace(/\.docx$/i, ""),
+      sourceFile.name.replace(/\.docx$/i, ""),
       "Tailored_Resume"
     );
 
@@ -130,8 +136,9 @@ export default function App() {
     setLoading(true);
 
     try {
-      const data = await analyzeResumeApi(resumeFile, jdText, provider);
+      const data = await analyzeResumeApi(sourceFile, jdText, provider);
 
+      setAnalyzedFile(sourceFile);
       setSessionId(data.session_id);
       setJobMeta({
         baseName: currentBaseName,
@@ -173,10 +180,13 @@ export default function App() {
     );
   };
 
-  const handleDownload = async () => {
-    if (!sessionId) return;
+  const handleDownload = async (format = "pdf") => {
+    const targetFormat = format === "docx" ? "docx" : "pdf";
+    const fileToExport = analyzedFile || resumeFile;
+    if (!fileToExport && !sessionId) return;
+
     setErrorMsg("");
-    setDownloading(true);
+    setDownloadFormat(targetFormat);
 
     const approvedMap = {};
     swaps
@@ -185,17 +195,23 @@ export default function App() {
         approvedMap[s.original] = s.replacement;
       });
 
-    const fallbackBase = resumeFile?.name
+    const fallbackBase = fileToExport?.name
       ? sanitizeFilenameSegment(
-          resumeFile.name.replace(/\.docx$/i, ""),
+          fileToExport.name.replace(/\.docx$/i, ""),
           "Tailored_Resume"
         )
       : "Tailored_Resume";
     const safeBase = jobMeta.baseName || fallbackBase;
-    const downloadName = `${safeBase}_${jobMeta.title}_${jobMeta.company}.pdf`;
+    const downloadName = `${safeBase}_${jobMeta.title}_${jobMeta.company}.${targetFormat}`;
 
     try {
-      const blob = await generatePdfApi(sessionId, approvedMap);
+      const exportFn =
+        targetFormat === "docx" ? generateDocxApi : generatePdfApi;
+      const blob = await exportFn({
+        resumeFile: fileToExport,
+        sessionId,
+        approvedMap,
+      });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -205,9 +221,11 @@ export default function App() {
       a.remove();
       setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     } catch (error) {
-      setErrorMsg(error.message || "Failed to generate PDF.");
+      setErrorMsg(
+        error.message || `Failed to generate ${targetFormat.toUpperCase()}.`
+      );
     } finally {
-      setDownloading(false);
+      setDownloadFormat(null);
     }
   };
 
@@ -263,7 +281,7 @@ export default function App() {
               onToggle={handleToggle}
               onEdit={handleEdit}
               onDownload={handleDownload}
-              downloading={downloading}
+              downloadFormat={downloadFormat}
             />
           </div>
         </div>

@@ -12,6 +12,19 @@ class KeywordSwapItem(BaseModel):
     category: str = Field(
         default="Skill", description="e.g., Hard Skill, Tool, Action Verb"
     )
+    context: Optional[str] = Field(
+        default=None,
+        description="Full resume line or bullet where the original phrase appears",
+    )
+    section: Optional[str] = Field(
+        default=None,
+        description="Detected resume section (e.g., EXPERIENCE, PROJECTS, SUMMARY)",
+    )
+    allow_bold: bool = Field(
+        default=True,
+        description="Whether **bold** markers will render as bold in this line",
+    )
+
 
 
 class AnalyzeResumeResponse(BaseModel):

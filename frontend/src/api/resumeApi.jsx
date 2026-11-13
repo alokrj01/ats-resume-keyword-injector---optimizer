@@ -48,20 +48,52 @@ export async function analyzeResumeApi(file, jdText, provider = "auto") {
   return response.json();
 }
 
-export async function generatePdfApi(sessionId, approvedMap) {
+async function requestTailoredDocument(
+  endpointPath,
+  { resumeFile, sessionId, approvedMap },
+  fallbackError
+) {
   const formData = new FormData();
-  formData.append("session_id", sessionId);
-  formData.append("replacements_json", JSON.stringify(approvedMap));
+  formData.append("replacements_json", JSON.stringify(approvedMap || {}));
 
-  const response = await fetch(`${API_BASE}/generate-pdf`, {
+  if (resumeFile instanceof Blob) {
+    const rawName =
+      typeof resumeFile.name === "string" && resumeFile.name.trim()
+        ? resumeFile.name.trim()
+        : "resume.docx";
+    const fileName = rawName.toLowerCase().endsWith(".docx")
+      ? rawName
+      : `${rawName}.docx`;
+    formData.append("resume_file", resumeFile, fileName);
+  }
+
+  if (sessionId) {
+    formData.append("session_id", sessionId);
+  }
+
+  const response = await fetch(`${API_BASE}/${endpointPath}`, {
     method: "POST",
     body: formData,
   });
 
   if (!response.ok) {
-    throw new Error(
-      await extractErrorMessage(response, "Failed to generate PDF")
-    );
+    throw new Error(await extractErrorMessage(response, fallbackError));
   }
   return response.blob();
+}
+
+export async function generatePdfApi({ resumeFile, sessionId, approvedMap }) {
+  return requestTailoredDocument(
+    "generate-pdf",
+    { resumeFile, sessionId, approvedMap },
+    "Failed to generate PDF"
+  );
+}
+
+export async function generateDocxApi({ resumeFile, sessionId, approvedMap }) {
+  return requestTailoredDocument(
+    "generate-docx",
+    { resumeFile, sessionId, approvedMap },
+    "Failed to generate DOCX"
+  );
 }

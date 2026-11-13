@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -19,14 +19,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 UPLOAD_CHUNK_BYTES = 64 * 1024           # 64 KB upload stream chunks
-SESSION_TTL_SECONDS = 3600               # Expire base session .docx files after 1 hour
+SESSION_TTL_SECONDS = 3600               # Expire fallback session .docx files after 1 hour
 MAX_JD_CHARS = 30_000                    # Upper bound for pasted job descriptions
 MAX_REPLACEMENTS_JSON_BYTES = 64 * 1024  # 64 KB max replacements JSON payload
 MAX_REPLACEMENT_ITEMS = 50
 MAX_PHRASE_CHARS = 1_000
 
+DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+PDF_MEDIA_TYPE = "application/pdf"
 
-def _safe_unlink(path: Path) -> None:
+
+def _safe_unlink(path: Optional[Path]) -> None:
+    if path is None:
+        return
     try:
         path.unlink(missing_ok=True)
     except OSError:
@@ -48,7 +55,7 @@ def _cleanup_expired_files(
             continue
 
 
-def _resolve_session_docx(session_id: str) -> tuple[str, Path]:
+def _resolve_session_docx(session_id: str) -> Tuple[str, Path]:
     """Ensure session_id is a valid UUID and cannot traverse outside TEMP_DIR."""
     try:
         parsed = uuid.UUID((session_id or "").strip())
@@ -117,7 +124,7 @@ def _parse_replacements(replacements_json: str) -> Dict[str, str]:
 
 
 async def _save_upload_bounded(upload: UploadFile, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
     bytes_written = 0
     try:
         with destination.open("wb") as out_file:
@@ -133,13 +140,13 @@ async def _save_upload_bounded(upload: UploadFile, destination: Path) -> None:
                     )
                 out_file.write(chunk)
     except BaseException:
-        _safe_unlink(destination)
+        await asyncio.to_thread(_safe_unlink, destination)
         raise
     finally:
         await upload.close()
 
     if bytes_written == 0:
-        _safe_unlink(destination)
+        await asyncio.to_thread(_safe_unlink, destination)
         raise HTTPException(status_code=400, detail="Uploaded .docx file is empty.")
 
 
@@ -151,11 +158,58 @@ def _normalize_and_resave_docx(docx_path: Path) -> str:
 
 
 def _build_optimized_docx(
-    source_docx: Path, output_docx: Path, replacements: Dict[str, str]
+    source_docx: Path,
+    output_docx: Path,
+    replacements: Dict[str, str],
+    normalize_first: bool = False,
 ) -> None:
     doc = DocxService.load_document(source_docx)
+    if normalize_first:
+        DocxService.normalize_and_extract_text(doc)
     DocxService.apply_replacements(doc, replacements)
     doc.save(str(output_docx))
+
+
+async def _acquire_source_docx(
+    resume_file: Optional[UploadFile], session_id: Optional[str]
+) -> Tuple[Path, bool]:
+    """
+    Prefer stateless uploaded `resume_file` so container restarts never break exports.
+    Fall back to cached `session_id.docx` for backward compatibility.
+    Returns (source_docx_path, is_ephemeral_upload).
+    """
+    if resume_file is not None and (resume_file.filename or "").strip():
+        filename = (resume_file.filename or "").strip()
+        if not filename.lower().endswith(".docx"):
+            await resume_file.close()
+            raise HTTPException(
+                status_code=400, detail="Only .docx files are supported."
+            )
+        ephemeral_src = (
+            settings.TEMP_DIR.resolve() / f"stateless_{uuid.uuid4().hex}_src.docx"
+        )
+        await _save_upload_bounded(resume_file, ephemeral_src)
+        return ephemeral_src, True
+
+    if resume_file is not None:
+        await resume_file.close()
+
+    if not (session_id or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Missing resume source: provide resume_file or session_id.",
+        )
+
+    _, source_docx = _resolve_session_docx(session_id or "")
+    exists = await asyncio.to_thread(source_docx.is_file)
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail="Session expired or file not found. Please re-upload your .docx resume.",
+        )
+
+    await asyncio.to_thread(source_docx.touch, exist_ok=True)
+    return source_docx, False
 
 
 @router.post("/analyze", response_model=AnalyzeResumeResponse)
@@ -204,7 +258,7 @@ async def analyze_resume(
         )
         t_llm = time.perf_counter()
     except BaseException:
-        _safe_unlink(saved_docx_path)
+        await asyncio.to_thread(_safe_unlink, saved_docx_path)
         raise
 
     logger.info(
@@ -216,51 +270,101 @@ async def analyze_resume(
     return result
 
 
-@router.post("/generate-pdf")
-async def generate_pdf(
-    session_id: str = Form(...),
+@router.post("/generate-docx")
+async def generate_docx(
     replacements_json: str = Form(...),
+    session_id: Optional[str] = Form(default=None),
+    resume_file: Optional[UploadFile] = File(default=None),
 ):
     t0 = time.perf_counter()
-    canonical_id, source_docx = _resolve_session_docx(session_id)
+    try:
+        replacements = _parse_replacements(replacements_json)
+    except BaseException:
+        if resume_file is not None:
+            await resume_file.close()
+        raise
 
-    if not source_docx.is_file():
-        raise HTTPException(
-            status_code=404, detail="Session expired or file not found."
+    source_docx, is_ephemeral = await _acquire_source_docx(resume_file, session_id)
+    output_docx = source_docx.parent / f"tailored_{uuid.uuid4().hex}.docx"
+
+    try:
+        await asyncio.to_thread(
+            _build_optimized_docx,
+            source_docx,
+            output_docx,
+            replacements,
+            is_ephemeral,
         )
+        t_swap = time.perf_counter()
+    except BaseException:
+        await asyncio.to_thread(_safe_unlink, output_docx)
+        raise
+    finally:
+        if is_ephemeral:
+            await asyncio.to_thread(_safe_unlink, source_docx)
 
-    # Refresh session TTL so active users editing swaps don't expire mid-session
-    source_docx.touch(exist_ok=True)
+    logger.info(
+        "[TIMING] Stateless=%s | DOCX Keyword Swap: %.2fs",
+        is_ephemeral,
+        t_swap - t0,
+    )
 
-    replacements = _parse_replacements(replacements_json)
+    return FileResponse(
+        path=str(output_docx),
+        media_type=DOCX_MEDIA_TYPE,
+        filename="ATS_Tailored_Resume.docx",
+        background=BackgroundTask(_safe_unlink, output_docx),
+    )
 
-    render_id = uuid.uuid4().hex
-    output_docx = source_docx.parent / f"{canonical_id}_{render_id}.docx"
+
+@router.post("/generate-pdf")
+async def generate_pdf(
+    replacements_json: str = Form(...),
+    session_id: Optional[str] = Form(default=None),
+    resume_file: Optional[UploadFile] = File(default=None),
+):
+    t0 = time.perf_counter()
+    try:
+        replacements = _parse_replacements(replacements_json)
+    except BaseException:
+        if resume_file is not None:
+            await resume_file.close()
+        raise
+
+    source_docx, is_ephemeral = await _acquire_source_docx(resume_file, session_id)
+    output_docx = source_docx.parent / f"tailored_{uuid.uuid4().hex}.docx"
     pdf_path = output_docx.with_suffix(".pdf")
 
     try:
         await asyncio.to_thread(
-            _build_optimized_docx, source_docx, output_docx, replacements
+            _build_optimized_docx,
+            source_docx,
+            output_docx,
+            replacements,
+            is_ephemeral,
         )
         t_swap = time.perf_counter()
 
         pdf_path = await DocxService.convert_to_pdf_async(output_docx)
         t_pdf = time.perf_counter()
     except BaseException:
-        _safe_unlink(pdf_path)
+        await asyncio.to_thread(_safe_unlink, pdf_path)
         raise
     finally:
-        _safe_unlink(output_docx)
+        await asyncio.to_thread(_safe_unlink, output_docx)
+        if is_ephemeral:
+            await asyncio.to_thread(_safe_unlink, source_docx)
 
     logger.info(
-        "[TIMING] Keyword Swap: %.2fs | LibreOffice PDF: %.2fs",
+        "[TIMING] Stateless=%s | Keyword Swap: %.2fs | LibreOffice PDF: %.2fs",
+        is_ephemeral,
         t_swap - t0,
         t_pdf - t_swap,
     )
 
     return FileResponse(
         path=str(pdf_path),
-        media_type="application/pdf",
+        media_type=PDF_MEDIA_TYPE,
         filename="ATS_Tailored_Resume.pdf",
         background=BackgroundTask(_safe_unlink, pdf_path),
     )

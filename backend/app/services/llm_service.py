@@ -12,10 +12,8 @@ from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.config import settings
-from app.schemas.resume_schema import (
-    AnalyzeResumeResponse,
-    KeywordSwapItem,
-)
+from app.schemas.resume_schema import AnalyzeResumeResponse
+from app.services.docx_service import DocxService, SECTION_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +62,19 @@ Return ONLY a valid JSON object matching this exact schema (no markdown fences, 
 """
 
 
+class LLMKeywordSwapSchema(BaseModel):
+    original: str
+    replacement: str
+    category: str = Field(default="Skill")
+
+
 class LLMOutputSchema(BaseModel):
     job_title: Optional[str] = Field(default="Software Engineer")
     company_name: Optional[str] = Field(default="General")
     ats_score_before: int = Field(..., ge=0, le=100)
     ats_score_estimated: int = Field(..., ge=0, le=100)
     missing_skills: List[str]
-    swaps: List[KeywordSwapItem]
+    swaps: List[LLMKeywordSwapSchema]
 
 
 class LLMService:
@@ -95,6 +99,66 @@ class LLMService:
             return max(0, min(100, int(round(float(cleaned)))))
         except (TypeError, ValueError, OverflowError):
             return 0
+
+    @staticmethod
+    def _detect_section_from_line(line: str) -> Optional[str]:
+        raw = line.strip()
+        if not raw or len(raw) > 60:
+            return None
+
+        cleaned = re.sub(r"^[\s•▪◦\-–—|]+|[\s:|\-–—]+$", "", raw).strip()
+        if not cleaned or ":" in cleaned:
+            return None
+
+        upper = re.sub(r"\s+", " ", cleaned.upper())
+        words = upper.split()
+        if len(words) > 6 or upper.endswith("."):
+            return None
+
+        for canonical, aliases in SECTION_PATTERNS:
+            if upper in aliases:
+                return canonical
+
+        other_headings = {
+            "VOLUNTEERING",
+            "VOLUNTEER EXPERIENCE",
+            "VOLUNTEER WORK",
+            "LEADERSHIP",
+            "LEADERSHIP & ACTIVITIES",
+            "LEADERSHIP AND ACTIVITIES",
+            "ACTIVITIES",
+            "EXTRACURRICULAR ACTIVITIES",
+            "ORGANIZATIONS",
+            "AFFILIATIONS",
+            "LANGUAGES",
+            "INTERESTS",
+            "HOBBIES",
+            "COURSEWORK",
+            "RELEVANT COURSEWORK",
+            "RESEARCH",
+            "RESEARCH EXPERIENCE",
+            "OPEN SOURCE",
+            "PATENTS",
+            "REFERENCES",
+            "ADDITIONAL INFORMATION",
+        }
+        if upper in other_headings:
+            return "OTHER"
+
+        return None
+
+    @classmethod
+    def _annotate_resume_lines(
+        cls, resume_lines: List[str]
+    ) -> List[Tuple[str, str]]:
+        annotated: List[Tuple[str, str]] = []
+        current_section = ""
+        for line in resume_lines:
+            detected = cls._detect_section_from_line(line)
+            if detected is not None:
+                current_section = detected
+            annotated.append((line, current_section))
+        return annotated
 
     @staticmethod
     def _extract_json_object(raw_text: str) -> Dict[str, Any]:
@@ -155,12 +219,10 @@ class LLMService:
         cand_orig = " ".join(orig_words[keep_left:keep_right_orig])
         cand_repl = " ".join(repl_words[keep_left:keep_right_repl])
 
-        if (
-            len(cand_orig.split()) >= 3
-            and cand_orig != cand_repl.replace("**", "")
-            and sum(1 for line in resume_lines if cand_orig in line) == 1
-        ):
-            return cand_orig, cand_repl
+        if len(cand_orig.split()) >= 3 and cand_orig != cand_repl.replace("**", ""):
+            cand_pattern = DocxService._build_match_pattern(cand_orig)
+            if sum(1 for line in resume_lines if cand_pattern.search(line)) == 1:
+                return cand_orig, cand_repl
 
         return original, replacement
 
@@ -499,6 +561,7 @@ class LLMService:
             )
 
         resume_lines = resume_cleaned.splitlines()
+        annotated_lines = cls._annotate_resume_lines(resume_lines)
         valid_swaps = []
         seen_originals: List[str] = []
 
@@ -522,7 +585,8 @@ class LLMService:
             if len(original.split()) < 2:
                 continue
 
-            if not any(original in line for line in resume_lines):
+            initial_pattern = DocxService._build_match_pattern(original)
+            if not any(initial_pattern.search(line) for line in resume_lines):
                 continue
 
             # Auto-trim unchanged leading/trailing words so surrounding bold metrics stay intact
@@ -530,12 +594,33 @@ class LLMService:
                 original, replacement, resume_lines
             )
 
+            match_pattern = DocxService._build_match_pattern(original)
+            matched_entry = next(
+                (
+                    (line, section)
+                    for line, section in annotated_lines
+                    if match_pattern.search(line)
+                ),
+                None,
+            )
+            if matched_entry is None:
+                continue
+
+            matched_line, matched_section = matched_entry
+            allow_bold = DocxService._should_allow_bold_highlights(
+                matched_line, matched_section
+            )
+
             # Fix common irregular past-tense LLM typo
             replacement = replacement.replace(
                 "Troubleshooted", "Troubleshot"
             ).replace("troubleshooted", "troubleshot")
 
-            if replacement.count("**") % 2 != 0 or replacement.count("**") > 2:
+            if (
+                not allow_bold
+                or replacement.count("**") % 2 != 0
+                or replacement.count("**") > 2
+            ):
                 replacement = replacement.replace("**", "").strip()
 
             replacement_plain = replacement.replace("**", "").strip()
@@ -553,6 +638,9 @@ class LLMService:
                     "original": original,
                     "replacement": replacement,
                     "category": str(swap.get("category") or "Skill").strip(),
+                    "context": matched_line,
+                    "section": matched_section or None,
+                    "allow_bold": allow_bold,
                 }
             )
 
