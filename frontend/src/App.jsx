@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import UploadForm from "./components/UploadForm";
 import SwapPreviewList from "./components/SwapPreviewList";
 import {
@@ -6,6 +6,7 @@ import {
   generateDocxApi,
   generatePdfApi,
 } from "./api/resumeApi";
+import { computeLiveAtsStats } from "./utils/atsScorer";
 
 const STORAGE_FILE_DATA = "ats_saved_resume_base64";
 const STORAGE_FILE_NAME = "ats_saved_resume_name";
@@ -74,13 +75,36 @@ export default function App() {
   const [jdText, setJdText] = useState("");
   const [provider, setProvider] = useState("auto");
   const [sessionId, setSessionId] = useState(null);
-  const [atsStats, setAtsStats] = useState(null);
+  const [analysisBase, setAnalysisBase] = useState(null);
   const [swaps, setSwaps] = useState([]);
   const [loading, setLoading] = useState(false);
   const [downloadFormat, setDownloadFormat] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
 
   const fileInputRef = useRef(null);
+
+  const liveAtsStats = useMemo(() => {
+    if (!analysisBase) return null;
+    const activeCount = swaps.filter(
+      (s) => s.approved && s.replacement.trim() !== ""
+    ).length;
+    const fallback = {
+      before: analysisBase.fallbackBefore,
+      after:
+        activeCount === 0
+          ? analysisBase.fallbackBefore
+          : analysisBase.fallbackAfter,
+      matched: analysisBase.initialMatched,
+      gained: [],
+      missing: analysisBase.initialMissing,
+    };
+    return computeLiveAtsStats(
+      analysisBase.baseResumeText,
+      analysisBase.jdSkills,
+      swaps,
+      fallback
+    );
+  }, [analysisBase, swaps]);
 
   const saveFileToLocal = (file) => {
     const reader = new FileReader();
@@ -145,10 +169,13 @@ export default function App() {
         title: sanitizeFilenameSegment(data.job_title, "Role"),
         company: sanitizeFilenameSegment(data.company_name, "Company"),
       });
-      setAtsStats({
-        before: data.ats_score_before,
-        after: data.ats_score_estimated,
-        missing: data.missing_skills || [],
+      setAnalysisBase({
+        baseResumeText: data.base_resume_text || "",
+        jdSkills: data.jd_skills || [],
+        fallbackBefore: data.ats_score_before,
+        fallbackAfter: data.ats_score_estimated,
+        initialMatched: data.matched_skills || [],
+        initialMissing: data.missing_skills || [],
       });
       setSwaps(
         (data.swaps || []).map((item, idx) => ({
@@ -277,7 +304,7 @@ export default function App() {
           <div className="lg:col-span-7">
             <SwapPreviewList
               swaps={swaps}
-              atsStats={atsStats}
+              atsStats={liveAtsStats}
               onToggle={handleToggle}
               onEdit={handleEdit}
               onDownload={handleDownload}

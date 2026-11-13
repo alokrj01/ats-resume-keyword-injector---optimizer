@@ -2,6 +2,13 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class JDSkillSpec(BaseModel):
+    skill: str = Field(..., description="Canonical JD skill label")
+    aliases: List[str] = Field(default_factory=list)
+    case_sensitive: bool = Field(default=False)
+    exclude_followers: List[str] = Field(default_factory=list)
+
+
 class KeywordSwapItem(BaseModel):
     original: str = Field(
         ..., description="Exact substring found in the original resume"
@@ -26,7 +33,6 @@ class KeywordSwapItem(BaseModel):
     )
 
 
-
 class AnalyzeResumeResponse(BaseModel):
     session_id: str
     model_used: Optional[str] = Field(
@@ -41,5 +47,8 @@ class AnalyzeResumeResponse(BaseModel):
     )
     ats_score_before: int = Field(..., ge=0, le=100)
     ats_score_estimated: int = Field(..., ge=0, le=100)
+    matched_skills: List[str] = Field(default_factory=list)
     missing_skills: List[str]
+    base_resume_text: str = Field(default="")
+    jd_skills: List[JDSkillSpec] = Field(default_factory=list)
     swaps: List[KeywordSwapItem]

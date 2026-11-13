@@ -61,6 +61,7 @@ export default function SwapPreviewList({
     (s) => s.approved && s.replacement.trim() !== ""
   ).length;
   const isBusy = Boolean(downloadFormat);
+  const scoreDelta = atsStats ? atsStats.after - atsStats.before : 0;
 
   const getLengthBadge = (orig, repl) => {
     const cleanRepl = repl.replace(/\*\*/g, "");
@@ -142,31 +143,67 @@ export default function SwapPreviewList({
   return (
     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col justify-between">
       <div>
-        {/* ATS Score Banner */}
+        {/* Live Deterministic ATS Score Banner */}
         {atsStats && (
-          <div className="mb-6 p-4 rounded-lg bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-6">
-              <div>
-                <span className="text-xs text-slate-400 block">
-                  Initial ATS Match
-                </span>
-                <span className="text-xl font-bold text-amber-400">
-                  {atsStats.before}%
-                </span>
+          <div className="mb-6 p-4 rounded-lg bg-slate-900 text-white space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-5">
+                <div>
+                  <span className="text-xs text-slate-400 block">
+                    Initial ATS Match
+                  </span>
+                  <span className="text-xl font-bold text-amber-400">
+                    {atsStats.before}%
+                  </span>
+                </div>
+                <span className="text-slate-500 text-lg">→</span>
+                <div>
+                  <span className="text-xs text-slate-400 block">
+                    Live Optimized Match
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-xl font-bold ${
+                        scoreDelta < 0 ? "text-rose-400" : "text-emerald-400"
+                      }`}
+                    >
+                      {atsStats.after}%
+                    </span>
+                    {scoreDelta !== 0 && (
+                      <span
+                        className={`text-xs font-mono px-2 py-0.5 rounded-full ${
+                          scoreDelta > 0
+                            ? "bg-emerald-500/20 text-emerald-300"
+                            : "bg-rose-500/20 text-rose-300"
+                        }`}
+                      >
+                        {scoreDelta > 0 ? `+${scoreDelta}%` : `${scoreDelta}%`}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <span className="text-slate-500 text-lg">→</span>
-              <div>
-                <span className="text-xs text-slate-400 block">
-                  Optimized Match
+
+              {atsStats.matched?.length > 0 && (
+                <span className="text-xs font-mono text-slate-400">
+                  {atsStats.matched.length} /{" "}
+                  {atsStats.matched.length + (atsStats.missing?.length || 0)}{" "}
+                  JD skills matched
                 </span>
-                <span className="text-xl font-bold text-emerald-400">
-                  {atsStats.after}%
-                </span>
-              </div>
+              )}
             </div>
 
+            {atsStats.gained?.length > 0 && (
+              <div className="text-xs text-slate-200 pt-2 border-t border-slate-800">
+                <span className="font-semibold text-emerald-400">
+                  + Unlocked by Active Swaps:{" "}
+                </span>
+                {atsStats.gained.join(", ")}
+              </div>
+            )}
+
             {atsStats.missing?.length > 0 && (
-              <div className="text-xs text-slate-300">
+              <div className="text-xs text-slate-300 pt-2 border-t border-slate-800">
                 <span className="font-semibold text-rose-300">
                   Unmapped JD Skills:{" "}
                 </span>
@@ -182,7 +219,7 @@ export default function SwapPreviewList({
               Keyword Replacement Queue
             </h2>
             <p className="text-xs text-slate-500">
-              Review full bullet context, edit phrasing, or uncheck swaps before exporting.
+              Review full bullet context, edit phrasing, or uncheck swaps — ATS score updates live.
             </p>
           </div>
           {swaps.length > 0 && (
