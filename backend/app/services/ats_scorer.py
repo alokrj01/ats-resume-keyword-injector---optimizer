@@ -2,7 +2,7 @@ import math
 import re
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from app.schemas.resume_schema import JDSkillSpec
+from app.schemas.resume_schema import JDSkillSpec, MAX_JD_SKILLS
 
 # Canonical multi-domain ATS skill catalog:
 # (canonical_name, aliases, case_sensitive, exclude_followers)
@@ -271,8 +271,6 @@ CANONICAL_SKILLS: Tuple[Tuple[str, Tuple[str, ...], bool, Tuple[str, ...]], ...]
         (),
     ),
 )
-
-MAX_JD_SKILLS = 20
 
 STOPWORD_PHRASES: Set[str] = {
     "and",

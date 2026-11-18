@@ -1,19 +1,46 @@
-# React + Vite
+# ATS Resume Optimizer frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A responsive React / Vite application for comparing a real DOCX resume with a real job description. The browser sends the selected file and job description to the configured backend, renders its ATS analysis, lets the user review edits, and exports a tailored DOCX or PDF. No fictional resume, mock analysis, or demo score is bundled in the production frontend.
 
-Currently, two official plugins are available:
+## Live data flow
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. `POST /api/v1/resume/analyze` uploads the DOCX and job description to the backend. It returns the detected role, matched and missing skills, validated phrase edits, and baseline/projected ATS scores.
+2. `POST /api/v1/resume/score` re-scores the active edits with the backend's deterministic `ATSScorer`. It does not call a cloud model and is debounced in the browser while a phrase is being edited.
+3. `POST /api/v1/resume/generate-docx` and `POST /api/v1/resume/generate-pdf` receive the original DOCX plus the currently active edit map, then return the exported file.
 
-## React Compiler
+The selected file is held only in page memory so exports work during the current session. Refreshing or leaving the page clears it from the browser.
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+## Develop
 
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
+Use Node **22.12+** and npm. In `frontend/` run:
 
-## Expanding the ESLint configuration
+```bash
+npm ci
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+In `backend/`, run:
+
+```bash
+uv sync
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Local frontend requests use Vite's same-origin `/api` proxy. Set `API_PROXY_TARGET` to change the development backend upstream. For a separately deployed API, set `VITE_API_URL` to its public HTTPS origin and include the frontend origin in the backend's `CORS_ORIGINS`.
+
+Configure a real `GROQ_API_KEY`, `OPENROUTER_API_KEY`, or `GEMINI_API_KEY` in `backend/.env` for analysis. PDF export requires LibreOffice on the backend server.
+
+## Verify and deploy
+
+```bash
+npm run lint
+npm run build
+```
+
+For a same-origin production preview of the built frontend and API, run this from `backend/`:
+
+```bash
+uv run uvicorn serve_site:app --host 0.0.0.0 --port 5173
+```
+
+For static hosting, rewrite `/privacy` and `/terms` to `index.html`; unknown page routes should serve `index.html` with a 404 response. Outfit Variable is bundled locally through Fontsource. The local icon sprite and license notices are in `public/art/` and `public/licenses/`.

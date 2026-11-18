@@ -1,9 +1,10 @@
+import { useEffect, useRef, useState } from 'react'
+import { Icon } from './Ui'
+
 export default function UploadForm({
   resumeFile,
   onFileChange,
-  onClearSavedResume,
-  keepResume,
-  setKeepResume,
+  onRemove,
   fileInputRef,
   provider,
   setProvider,
@@ -11,118 +12,328 @@ export default function UploadForm({
   setJdText,
   onAnalyze,
   loading,
+  busy,
+  error,
+  onClearError,
 }) {
+  const [dragging, setDragging] = useState(false)
+
+  const dragDepth = useRef(0)
+  const description = useRef(null)
+  const picker = useRef(null)
+  const focusPickerAfterRemove = useRef(false)
+
+  useEffect(() => {
+    if (resumeFile || !focusPickerAfterRemove.current) {
+      return undefined
+    }
+
+    focusPickerAfterRemove.current = false
+
+    const frame = requestAnimationFrame(() => {
+      picker.current?.focus()
+    })
+
+    return () => cancelAnimationFrame(frame)
+  }, [resumeFile])
+
+  function choose(file) {
+    if (!busy && file) {
+      onFileChange(file)
+    }
+  }
+
+  function openFilePicker() {
+    if (!busy) {
+      fileInputRef.current?.click()
+    }
+  }
+
+  function removeFile() {
+    // The Remove button unmounts, so focus the picker after it renders.
+    focusPickerAfterRemove.current = true
+    onRemove()
+  }
+
+  function leave(event) {
+    event.preventDefault()
+
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+
+    if (!dragDepth.current) {
+      setDragging(false)
+    }
+  }
+
   return (
     <form
-      onSubmit={onAnalyze}
-      className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-5 h-fit"
+      className="panel input-panel"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault()
+        onAnalyze()
+
+        if (!resumeFile) {
+          picker.current?.focus()
+        } else if (!jdText.trim()) {
+          description.current?.focus()
+        }
+      }}
+      aria-label="Resume setup"
     >
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-semibold text-slate-700">
-            1. Base Resume (.docx)
-          </label>
-          {resumeFile && (
-            <button
-              type="button"
-              onClick={onClearSavedResume}
-              className="text-xs text-rose-600 hover:text-rose-700 font-medium cursor-pointer"
-            >
-              Remove File
-            </button>
-          )}
+      <div className="panel-head">
+        <span className="tile yellow">
+          <Icon name="files" size={24} />
+        </span>
+
+        <div>
+          <h3 className="heading-6">Resume setup</h3>
+          <p className="caption-2 muted">
+            Use your real resume and target role
+          </p>
+        </div>
+      </div>
+
+      <div className="form-fields">
+        <div className="field-block">
+          <div className="field-label">
+            <label id="file-label" htmlFor="resume-file" className="title-4">
+              Base resume
+            </label>
+
+            <span className="micro-label caption-4">Required</span>
+          </div>
+
+          <input
+            ref={fileInputRef}
+            id="resume-file"
+            tabIndex={-1}
+            className="sr-only"
+            type="file"
+            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            aria-labelledby="file-label"
+            aria-describedby="file-hint"
+            aria-invalid={error?.field === 'file' || undefined}
+            disabled={busy}
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+
+              event.target.value = ''
+              choose(file)
+            }}
+          />
+
+          <div
+            className={`drop-area ${dragging ? 'dragging' : ''} ${resumeFile ? 'has-file' : ''
+              }`}
+            onDragOver={(event) => event.preventDefault()}
+            onDragEnter={(event) => {
+              event.preventDefault()
+
+              if (!busy) {
+                dragDepth.current += 1
+                setDragging(true)
+              }
+            }}
+            onDragLeave={leave}
+            onDrop={(event) => {
+              event.preventDefault()
+
+              dragDepth.current = 0
+              setDragging(false)
+
+              choose(event.dataTransfer.files?.[0])
+            }}
+          >
+            {resumeFile ? (
+              <div className="chosen-file">
+                <span className="file-icon">
+                  <Icon name="file-doc" size={28} />
+                </span>
+
+                <div className="file-info">
+                  <span className="title-3 file-name">
+                    {resumeFile.name}
+                  </span>
+
+                  <span className="caption-2 muted" id="file-hint">
+                    {resumeFile.size >= 1024 * 1024
+                      ? `${(resumeFile.size / (1024 * 1024)).toFixed(1)} MB`
+                      : `${Math.max(
+                        1,
+                        Math.round(resumeFile.size / 1024)
+                      )} KB`}{' '}
+                    · Word document
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  className="quiet-btn caption-4"
+                  onClick={openFilePicker}
+                  disabled={busy}
+                >
+                  <Icon name="arrows-clockwise" size={16} />
+                  Replace file
+                </button>
+
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Remove resume"
+                  title="Remove resume"
+                  onClick={removeFile}
+                  disabled={busy}
+                >
+                  <Icon name="x" size={18} />
+                </button>
+              </div>
+            ) : (
+              <button
+                ref={picker}
+                className="drop-target"
+                type="button"
+                disabled={busy}
+                onClick={openFilePicker}
+              >
+                <span className="upload-icon">
+                  <Icon name="cloud-arrow-up" size={28} />
+                </span>
+
+                <span className="title-3">
+                  {dragging ? (
+                    'Drop your resume here'
+                  ) : (
+                    <>
+                      <span className="upload-link">Choose a file</span> or
+                      drag it here
+                    </>
+                  )}
+                </span>
+
+                <span id="file-hint" className="caption-2 muted">
+                  DOCX format · Up to 10 MB
+                </span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {resumeFile && (
-          <div className="mb-2.5 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between text-xs text-emerald-800">
-            <span className="truncate font-medium">
-              Active Resume: <strong>{resumeFile.name}</strong>
-            </span>
-            {keepResume && (
-              <span className="ml-2 px-1.5 py-0.5 bg-emerald-200/70 text-emerald-900 rounded text-[10px] font-semibold shrink-0">
-                Saved
-              </span>
+        <div className="field-block">
+          <div className="field-label">
+            <label htmlFor="jd-text" className="title-4">
+              Target job description
+            </label>
+
+            {jdText ? (
+              <button
+                type="button"
+                className="quiet-btn caption-4"
+                onClick={() => {
+                  setJdText('')
+                  description.current?.focus()
+                }}
+                disabled={busy}
+              >
+                Clear
+              </button>
+            ) : (
+              <span className="micro-label caption-4">Required</span>
             )}
+          </div>
+
+          <textarea
+            className="body-6"
+            ref={description}
+            id="jd-text"
+            rows={6}
+            maxLength={30000}
+            placeholder="Paste the responsibilities, requirements, and skills from the live job listing…"
+            value={jdText}
+            onChange={(event) => setJdText(event.target.value)}
+            aria-invalid={error?.field === 'jd' || undefined}
+            disabled={busy}
+          />
+
+          <div
+            className="char-count caption-5"
+            aria-label={`${jdText.length} of 30000 characters`}
+          >
+            {jdText.length.toLocaleString('en-US')} / 30,000
+          </div>
+        </div>
+
+        <details className="provider-settings">
+          <summary className="title-4">
+            <Icon name="sliders-horizontal" size={18} />
+            Analysis settings
+
+            <span className="setting-value caption-2">
+              {
+                {
+                  auto: 'Auto',
+                  groq: 'Groq',
+                  openrouter: 'OpenRouter',
+                  gemini: 'Gemini',
+                }[provider]
+              }
+            </span>
+
+            <Icon name="caret-down" size={16} />
+          </summary>
+
+          <div className="settings-inner">
+            <label htmlFor="provider" className="title-4">
+              Cloud provider
+            </label>
+
+            <select
+              id="provider"
+              value={provider}
+              onChange={(event) => setProvider(event.target.value)}
+              disabled={busy}
+              className="body-6"
+            >
+              <option value="auto">Auto · Try available providers</option>
+              <option value="groq">Groq</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="gemini">Google Gemini</option>
+            </select>
+
+            <p className="caption-2 muted">
+              Your backend extracts the resume text, compares it with this job
+              description, and returns the ATS score and review data.
+            </p>
+          </div>
+        </details>
+
+        {error && (
+          <div className="alert" id="form-error" role="alert">
+            <Icon name="warning-circle" size={20} />
+
+            <p className="body-6">{error.message}</p>
+
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Dismiss setup message"
+              onClick={onClearError}
+            >
+              <Icon name="x" size={16} />
+            </button>
           </div>
         )}
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".docx"
-          onChange={(e) => onFileChange(e.target.files[0] || null)}
-          className="block w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-          required={!resumeFile}
-        />
-
-        <label className="flex items-center gap-2 mt-2.5 text-xs text-slate-600 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={keepResume}
-            onChange={(e) => setKeepResume(e.target.checked)}
-            className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-          />
-          Keep Base Resume saved for next Job Descriptions
-        </label>
-      </div>
-
-      <div>
-        <label className="block text-sm font-semibold text-slate-700 mb-2">
-          2. Cloud AI Provider
-        </label>
-        <select
-          value={provider}
-          onChange={(e) => setProvider(e.target.value)}
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+        <button
+          type="submit"
+          className="btn primary analyze button-md"
+          disabled={busy}
         >
-          <option value="auto">
-            Auto Failover (Qwen Cloud → Gemini Cloud)
-          </option>
-          <option value="groq">
-            Qwen 3.8 27B — GroqCloud (Free & Fastest)
-          </option>
-          <option value="openrouter">
-            Qwen Free Tier — OpenRouter Cloud
-          </option>
-          <option value="gemini">Google Gemini Cloud</option>
-        </select>
-        <p className="mt-1.5 text-xs text-slate-500">
-          100% cloud-hosted inference — zero CPU/GPU load on your machine.
-        </p>
+          <Icon name="sparkle" />
+          {loading ? 'Analyzing resume…' : 'Analyze resume'}
+          <Icon className="push" name="arrow-right" size={18} />
+        </button>
       </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-semibold text-slate-700">
-            3. Target Job Description
-          </label>
-          {jdText && (
-            <button
-              type="button"
-              onClick={() => setJdText("")}
-              className="text-xs text-slate-500 hover:text-rose-600 font-medium cursor-pointer"
-            >
-              Clear JD
-            </button>
-          )}
-        </div>
-        <textarea
-          rows={10}
-          value={jdText}
-          onChange={(e) => setJdText(e.target.value)}
-          placeholder="Paste the job requirements, tech stack, and responsibilities..."
-          className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-          required
-        />
-      </div>
-
-      <button
-        type="submit"
-        disabled={loading || !resumeFile || !jdText.trim()}
-        className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-semibold rounded-lg text-sm transition cursor-pointer"
-      >
-        {loading ? "Analyzing in Cloud..." : "Analyze & Map Keywords"}
-      </button>
     </form>
-  );
+  )
 }

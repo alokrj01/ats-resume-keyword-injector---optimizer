@@ -1,322 +1,422 @@
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+import AtsScorecard from './AtsScorecard'
+import { Icon } from './Ui'
+
+function PreviewDrawing() {
+  return (
+    <svg
+      className="preview-drawing"
+      width="128"
+      height="80"
+      viewBox="0 0 128 80"
+      aria-hidden="true"
+      fill="none"
+    >
+      <g transform="rotate(-9 54 40)">
+        <rect
+          x="33"
+          y="10"
+          width="49"
+          height="59"
+          rx="6"
+          fill="#cae6dd"
+          stroke="#366358"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="39"
+          y="6"
+          width="49"
+          height="59"
+          rx="6"
+          fill="#fffefa"
+          stroke="#36564b"
+          strokeWidth="1.5"
+        />
+        <path
+          d="M49 19h20"
+          stroke="#4e7464"
+          strokeWidth="3.5"
+          strokeLinecap="round"
+        />
+        <path
+          d="M49 28h28M49 36h24M49 44h16"
+          stroke="#b5cfc3"
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+      </g>
+
+      <circle
+        cx="82"
+        cy="49"
+        r="13.5"
+        fill="#ffda78"
+        stroke="#305448"
+        strokeWidth="2"
+      />
+      <path
+        d="M82 39v10l7 4"
+        stroke="#305448"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m92 59 11 10"
+        stroke="#305448"
+        strokeWidth="5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M25 25q0 6 6 7-6 1-6 8-1-7-7-8 6-1 7-7Z"
+        fill="#ef9dad"
+        stroke="#7c5158"
+        strokeWidth="1"
+      />
+      <circle cx="103" cy="21" r="2" fill="#86bbab" />
+    </svg>
+  )
 }
 
-function findPhraseSpan(context, phrase) {
-  if (!context || !phrase) return null;
+function BoldText({ text, allow }) {
+  const stars = text.match(/\*\*/g) || []
 
-  try {
-    const escaped = escapeRegExp(phrase);
-    const startsWord = /^[A-Za-z0-9_]/.test(phrase);
-    const endsWord = /[A-Za-z0-9_]$/.test(phrase);
-    const pattern = new RegExp(
-      `${startsWord ? "(?<!\\w)" : ""}${escaped}${endsWord ? "(?!\\w)" : ""}`
-    );
-    const match = pattern.exec(context);
-    if (match) {
-      return { start: match.index, end: match.index + match[0].length };
-    }
-  } catch {
-    // Fall back to indexOf if lookbehind is unsupported in an older browser
+  if (!allow || stars.length !== 2) {
+    return text.replace(/\*\*/g, '')
   }
 
-  const idx = context.indexOf(phrase);
-  if (idx !== -1) {
-    return { start: idx, end: idx + phrase.length };
-  }
-  return null;
+  return text
+    .split(/(\*\*[^*]+\*\*)/g)
+    .map((part, index) =>
+      part.startsWith('**') && part.endsWith('**') ? (
+        <strong key={index}>{part.slice(2, -2)}</strong>
+      ) : (
+        part.replace(/\*\*/g, '')
+      )
+    )
 }
 
-function renderReplacementTokens(text, allowBold) {
-  const starCount = (text.match(/\*\*/g) || []).length;
-  const canRenderBold =
-    allowBold && starCount === 2 && /\*\*[^*]+\*\*/.test(text);
+function PhraseCard({ item, index, onToggle, onEdit, busy }) {
+  const plain = item.replacement.replace(/\*\*/g, '').trim()
+  const difference = plain.length - item.original.length
 
-  if (!canRenderBold) {
-    return text.replace(/\*\*/g, "");
-  }
+  const mightWrap =
+    Math.abs(difference) / Math.max(1, item.original.length) > 0.12
 
-  return text.split(/(\*\*[^*]+\*\*)/g).map((part, idx) => {
-    if (!part) return null;
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
-      return (
-        <strong key={idx} className="font-bold text-emerald-950">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    }
-    return <span key={idx}>{part.replace(/\*\*/g, "")}</span>;
-  });
+  const line = item.context || item.original
+  const start = line.indexOf(item.original)
+  const showReplacement = item.approved && plain && start >= 0
+
+  const echo =
+    showReplacement &&
+    /\band\b/i.test(plain) &&
+    /^,\s*and\b/i.test(line.slice(start + item.original.length))
+
+  return (
+    <article className={`phrase ${item.approved ? '' : 'inactive'}`}>
+      <div className="phrase-top">
+        <label className="check-label title-4">
+          <input
+            type="checkbox"
+            aria-label={`Apply edit ${index + 1}`}
+            checked={item.approved}
+            onChange={() => onToggle(item.id)}
+            disabled={busy}
+          />
+          Edit {String(index + 1).padStart(2, '0')}
+        </label>
+
+        <span className="tag subtle caption-4">
+          {item.section && item.section !== 'OTHER'
+            ? item.section.toLowerCase()
+            : item.category || 'Phrase'}
+        </span>
+      </div>
+
+      <span className="original-phrase body-6">
+        <span className="sr-only">Original: </span>
+        {item.original}
+      </span>
+
+      <label className="sr-only" htmlFor={`replacement-${item.id}`}>
+        Replacement for {item.original}
+      </label>
+
+      <div className="edit-box">
+        <Icon name="pencil-simple" size={16} />
+
+        <input
+          id={`replacement-${item.id}`}
+          className="body-3"
+          type="text"
+          maxLength={1000}
+          disabled={!item.approved || busy}
+          value={item.replacement}
+          onChange={event => onEdit(item.id, event.target.value)}
+        />
+      </div>
+
+      <p className="context-line body-6">
+        {showReplacement ? (
+          <>
+            {line.slice(0, start)}
+            <mark>
+              <BoldText
+                text={item.replacement}
+                allow={item.allow_bold !== false}
+              />
+            </mark>
+            {line.slice(start + item.original.length)}
+          </>
+        ) : (
+          line
+        )}
+      </p>
+
+      <div className="phrase-meta caption-5">
+        <span>
+          {item.allow_bold === false
+            ? 'Plain text in this section'
+            : 'Use ** around one word to bold it'}
+        </span>
+
+        <span className={mightWrap ? 'warn-text' : ''}>
+          {difference > 0 ? '+' : ''}
+          {difference} chars
+          {mightWrap ? ' · May wrap' : ''}
+        </span>
+      </div>
+
+      {echo && (
+        <p className="caption-2 warn-text">
+          The sentence continues with “, and”. Check the phrasing in context.
+        </p>
+      )}
+    </article>
+  )
+}
+
+function Skeleton() {
+  return (
+    <div className="review-skeleton" role="status">
+      <span className="sr-only">
+        Reading the resume and comparing it with the job description.
+      </span>
+      <div />
+      <i />
+      <i />
+      <div />
+      <i />
+    </div>
+  )
 }
 
 export default function SwapPreviewList({
+  result,
   swaps,
-  atsStats,
+  score,
+  scoreMatchesSelection,
+  scoreRefreshing,
+  scoreError,
+  onRetryScore,
   onToggle,
   onEdit,
   onDownload,
+  onCancelDownload,
   downloadFormat,
+  loading,
+  exportError,
+  onClearExportError,
+  downloaded,
 }) {
   const activeCount = swaps.filter(
-    (s) => s.approved && s.replacement.trim() !== ""
-  ).length;
-  const isBusy = Boolean(downloadFormat);
-  const scoreDelta = atsStats ? atsStats.after - atsStats.before : 0;
-
-  const getLengthBadge = (orig, repl) => {
-    const cleanRepl = repl.replace(/\*\*/g, "");
-    const diff = cleanRepl.length - orig.length;
-    const pct = orig.length > 0 ? Math.abs(diff / orig.length) * 100 : 0;
-    const isSafe = pct <= 12;
-
-    return (
-      <span
-        className={`text-xs font-mono px-2 py-0.5 rounded-full ${
-          isSafe
-            ? "bg-emerald-100 text-emerald-800"
-            : "bg-amber-100 text-amber-800"
-        }`}
-      >
-        {diff > 0 ? `+${diff}` : diff} chars{" "}
-        {isSafe ? "(Layout Safe)" : "(May Wrap Line)"}
-      </span>
-    );
-  };
-
-  const renderBulletPreview = (item) => {
-    if (!item.context) return null;
-
-    const span = findPhraseSpan(item.context, item.original);
-    if (!span) {
-      return (
-        <div className="text-xs text-slate-600 bg-white px-3 py-2 rounded border border-slate-200 leading-relaxed">
-          {item.context}
-        </div>
-      );
-    }
-
-    const before = item.context.slice(0, span.start);
-    const matched = item.context.slice(span.start, span.end);
-    const after = item.context.slice(span.end);
-    const cleanRepl = item.replacement.replace(/\*\*/g, "").trim();
-    const allowBold = item.allow_bold !== false;
-
-    const hasListAndEcho =
+    item =>
       item.approved &&
-      /\band\b/i.test(cleanRepl) &&
-      /^,\s*and\b/i.test(after);
+      item.replacement.replace(/\*\*/g, '').trim()
+  ).length
 
-    return (
-      <div className="bg-white px-3 py-2 rounded border border-slate-200 space-y-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-            Live Bullet Preview
-          </span>
-          <span className="text-[11px] text-slate-400">
-            {allowBold
-              ? "Tip: wrap 1 keyword in **bold**"
-              : "Bold locked in this section"}
-          </span>
-        </div>
-        <p className="text-xs text-slate-700 leading-relaxed">
-          <span>{before}</span>
-          {item.approved && cleanRepl ? (
-            <span className="bg-emerald-100/90 text-emerald-900 px-1 py-0.5 rounded border border-emerald-300">
-              {renderReplacementTokens(item.replacement, allowBold)}
-            </span>
-          ) : (
-            <span className="underline decoration-slate-400 font-medium text-slate-800">
-              {matched}
-            </span>
-          )}
-          <span>{after}</span>
-        </p>
-        {hasListAndEcho && (
-          <p className="text-[11px] text-amber-700">
-            Note: Sentence continues with &ldquo;, and ...&rdquo; — consider comma phrasing instead of &ldquo;and&rdquo;.
-          </p>
-        )}
-      </div>
-    );
-  };
+  const busy = loading || Boolean(downloadFormat)
+
+  const status = loading
+    ? 'Analyzing'
+    : result
+      ? 'Live review'
+      : 'Awaiting input'
+
+  const roleLabel = [result?.title, result?.company]
+    .filter(Boolean)
+    .join(' · ')
+
+  const exportMessage = downloadFormat
+    ? `Preparing your ${downloadFormat.toUpperCase()} download. You can cancel and keep your approved edits.`
+    : downloaded ||
+    (activeCount
+      ? 'Only active edits are included in your download.'
+      : 'No edits are active, so the exported copy will match your uploaded resume.')
 
   return (
-    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col justify-between">
-      <div>
-        {/* Live Deterministic ATS Score Banner */}
-        {atsStats && (
-          <div className="mb-6 p-4 rounded-lg bg-slate-900 text-white space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-5">
-                <div>
-                  <span className="text-xs text-slate-400 block">
-                    Initial ATS Match
-                  </span>
-                  <span className="text-xl font-bold text-amber-400">
-                    {atsStats.before}%
-                  </span>
-                </div>
-                <span className="text-slate-500 text-lg">→</span>
-                <div>
-                  <span className="text-xs text-slate-400 block">
-                    Live Optimized Match
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`text-xl font-bold ${
-                        scoreDelta < 0 ? "text-rose-400" : "text-emerald-400"
-                      }`}
-                    >
-                      {atsStats.after}%
-                    </span>
-                    {scoreDelta !== 0 && (
-                      <span
-                        className={`text-xs font-mono px-2 py-0.5 rounded-full ${
-                          scoreDelta > 0
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : "bg-rose-500/20 text-rose-300"
-                        }`}
-                      >
-                        {scoreDelta > 0 ? `+${scoreDelta}%` : `${scoreDelta}%`}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
+    <section
+      className="panel review-panel"
+      id="review"
+      aria-labelledby="review-title"
+      tabIndex={-1}
+    >
+      <div className="panel-head">
+        <span className="tile pink">
+          <Icon name="chart-bar" size={24} />
+        </span>
 
-              {atsStats.matched?.length > 0 && (
-                <span className="text-xs font-mono text-slate-400">
-                  {atsStats.matched.length} /{" "}
-                  {atsStats.matched.length + (atsStats.missing?.length || 0)}{" "}
-                  JD skills matched
-                </span>
+        <div>
+          <h3 className="heading-6" id="review-title">
+            ATS review
+          </h3>
+          <p className="caption-2 muted">
+            Your live score, skills, and suggested edits
+          </p>
+        </div>
+
+        <span
+          className={`status caption-4 ${result || loading ? 'ready' : ''}`}
+        >
+          <i />
+          {status}
+        </span>
+      </div>
+
+      {loading ? (
+        <Skeleton />
+      ) : !result ? (
+        <div className="review-empty">
+          <PreviewDrawing />
+          <h4 className="heading-5">Your ATS results appear here</h4>
+          <p className="body-6 muted">
+            Upload your DOCX and paste a real job description. Your backend
+            will return the score, skill coverage, and reviewable phrase edits.
+          </p>
+        </div>
+      ) : (
+        <div className="review-content">
+          <div className="review-source">
+            <Icon name="file-doc" size={16} />
+
+            <div>
+              <span className="caption-1">
+                {result.sourceName || 'Analyzed resume'}
+              </span>
+
+              {roleLabel && (
+                <span className="caption-2 muted">{roleLabel}</span>
               )}
             </div>
 
-            {atsStats.gained?.length > 0 && (
-              <div className="text-xs text-slate-200 pt-2 border-t border-slate-800">
-                <span className="font-semibold text-emerald-400">
-                  + Unlocked by Active Swaps:{" "}
-                </span>
-                {atsStats.gained.join(", ")}
-              </div>
-            )}
-
-            {atsStats.missing?.length > 0 && (
-              <div className="text-xs text-slate-300 pt-2 border-t border-slate-800">
-                <span className="font-semibold text-rose-300">
-                  Unmapped JD Skills:{" "}
-                </span>
-                {atsStats.missing.join(", ")}
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between border-b border-slate-200 pb-4 mb-4">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-800">
-              Keyword Replacement Queue
-            </h2>
-            <p className="text-xs text-slate-500">
-              Review full bullet context, edit phrasing, or uncheck swaps — ATS score updates live.
-            </p>
-          </div>
-          {swaps.length > 0 && (
-            <span className="text-xs font-medium bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-md">
-              {activeCount} / {swaps.length} active
-            </span>
-          )}
-        </div>
-
-        {swaps.length === 0 ? (
-          <div className="text-center py-16 text-slate-400 text-sm">
-            Upload your .docx resume and paste a JD to preview exact phrase swaps.
-          </div>
-        ) : (
-          <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
-            {swaps.map((item) => (
-              <div
-                key={item.id}
-                className={`p-4 rounded-lg border transition ${
-                  item.approved
-                    ? "border-slate-200 bg-slate-50/70"
-                    : "border-slate-100 bg-slate-100/40 opacity-65"
-                }`}
+            {result.modelUsed && (
+              <span
+                className="analysis-model caption-5"
+                title={result.modelUsed}
               >
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={item.approved}
-                    onChange={() => onToggle(item.id)}
-                    aria-label={`Approve replacement for ${item.original}`}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 cursor-pointer"
-                  />
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {item.section && item.section !== "OTHER" && (
-                          <span className="text-[11px] font-semibold uppercase tracking-wider bg-slate-200 text-slate-700 px-2 py-0.5 rounded">
-                            {item.section}
-                          </span>
-                        )}
-                        <span className="text-xs font-semibold uppercase tracking-wider text-indigo-600">
-                          {item.category}
-                        </span>
-                      </div>
-                      {getLengthBadge(item.original, item.replacement)}
-                    </div>
-
-                    <div className="text-sm bg-rose-50 text-rose-800 px-3 py-1.5 rounded border border-rose-200 line-through">
-                      {item.original}
-                    </div>
-
-                    <input
-                      type="text"
-                      value={item.replacement}
-                      onChange={(e) => onEdit(item.id, e.target.value)}
-                      disabled={!item.approved}
-                      className="w-full text-sm bg-emerald-50 text-emerald-900 font-medium px-3 py-1.5 rounded border border-emerald-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none disabled:cursor-not-allowed"
-                    />
-
-                    {renderBulletPreview(item)}
-                  </div>
-                </div>
-              </div>
-            ))}
+                {result.modelUsed}
+              </span>
+            )}
           </div>
-        )}
-      </div>
 
-      {swaps.length > 0 && (
-        <div className="pt-5 mt-6 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <span className="text-xs text-slate-500">
-            Stateless export — preserves fonts, links & XML runs
-          </span>
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => onDownload("docx")}
-              disabled={isBusy || activeCount === 0}
-              className="py-2.5 px-4 bg-white hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400 text-slate-800 font-semibold rounded-lg text-sm border border-slate-300 transition cursor-pointer disabled:cursor-not-allowed"
-            >
-              {downloadFormat === "docx"
-                ? "Building .DOCX..."
-                : "Download .DOCX"}
-            </button>
-            <button
-              type="button"
-              onClick={() => onDownload("pdf")}
-              disabled={isBusy || activeCount === 0}
-              className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-semibold rounded-lg text-sm transition cursor-pointer disabled:cursor-not-allowed"
-            >
-              {downloadFormat === "pdf"
-                ? "Rendering .PDF..."
-                : "Apply & Download .PDF"}
-            </button>
+          <AtsScorecard
+            score={score}
+            selectionIsCurrent={scoreMatchesSelection}
+            refreshing={scoreRefreshing}
+            error={scoreError}
+            onRetry={onRetryScore}
+          />
+
+          <div className="queue-label">
+            <h4 className="title-3">Suggested phrase edits</h4>
+
+            <span className="caption-2 muted">
+              {activeCount} of {swaps.length} active
+            </span>
+          </div>
+
+          {swaps.length ? (
+            <div className="phrase-list">
+              {swaps.map((item, index) => (
+                <PhraseCard
+                  key={item.id}
+                  item={item}
+                  index={index}
+                  onToggle={onToggle}
+                  onEdit={onEdit}
+                  busy={busy}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="empty-small body-6 muted">
+              Your backend did not return any safe phrase edits for this resume
+              and role. Review the ATS score details above, then try a different
+              job description if needed.
+            </p>
+          )}
+
+          <div className="export-bar">
+            <div className="export-buttons">
+              {['docx', 'pdf'].map(format => (
+                <button
+                  key={format}
+                  className={`btn ${format === 'pdf' ? 'primary' : 'secondary'
+                    } button-sm`}
+                  onClick={() => onDownload(format)}
+                  disabled={busy}
+                >
+                  <Icon
+                    name={format === 'pdf' ? 'file-pdf' : 'file-doc'}
+                    size={18}
+                  />
+                  {downloadFormat === format
+                    ? 'Preparing…'
+                    : `Download ${format.toUpperCase()}`}
+                </button>
+              ))}
+
+              {downloadFormat && (
+                <button
+                  type="button"
+                  className="btn secondary button-sm"
+                  onClick={onCancelDownload}
+                >
+                  <Icon name="x" size={18} />
+                  Cancel download
+                </button>
+              )}
+            </div>
+
+            <p className="caption-5 muted" role="status">
+              {exportMessage}
+            </p>
           </div>
         </div>
       )}
-    </div>
-  );
+
+      {exportError && (
+        <div className="alert" role="alert">
+          <Icon name="warning-circle" size={20} />
+          <p className="body-6">{exportError}</p>
+
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Dismiss review message"
+            onClick={onClearExportError}
+          >
+            <Icon name="x" size={16} />
+          </button>
+        </div>
+      )}
+
+      {!result && !loading && (
+        <div className="review-foot caption-2">
+          <Icon name="lock-key-open" size={18} />
+          No placeholder report—results are generated after a live analysis.
+        </div>
+      )}
+    </section>
+  )
 }

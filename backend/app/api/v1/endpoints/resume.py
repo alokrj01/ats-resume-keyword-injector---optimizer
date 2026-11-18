@@ -11,7 +11,12 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from app.core.config import settings
-from app.schemas.resume_schema import AnalyzeResumeResponse
+from app.schemas.resume_schema import (
+    ATSScoreRequest,
+    ATSScoreResponse,
+    AnalyzeResumeResponse,
+)
+from app.services.ats_scorer import ATSScorer
 from app.services.docx_service import DocxService, MAX_DOCX_COMPRESSED_BYTES
 from app.services.llm_service import LLMService
 
@@ -210,6 +215,71 @@ async def _acquire_source_docx(
 
     await asyncio.to_thread(source_docx.touch, exist_ok=True)
     return source_docx, False
+
+
+@router.post("/score", response_model=ATSScoreResponse)
+def score_resume(payload: ATSScoreRequest):
+    """Re-score selected edits without calling a cloud model or re-uploading a file.
+
+    The browser only sends text and skill rules that the preceding /analyze response
+    returned. Keeping the calculation here makes the displayed score use exactly the
+    same ATSScorer implementation as the original analysis.
+    """
+    base_resume_text = payload.base_resume_text.strip()
+    if not base_resume_text:
+        raise HTTPException(status_code=400, detail="Resume text cannot be empty.")
+
+    replacements: Dict[str, str] = {}
+    for original, replacement in payload.replacements.items():
+        original_clean = original.strip()
+        replacement_clean = replacement.strip()
+        if not original_clean or not replacement_clean:
+            continue
+        if (
+            len(original_clean) > MAX_PHRASE_CHARS
+            or len(replacement_clean) > MAX_PHRASE_CHARS
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Score replacements cannot exceed {MAX_PHRASE_CHARS} characters."
+                ),
+            )
+        replacements[original_clean] = replacement_clean
+
+    matched_before = {
+        spec.skill
+        for spec in payload.jd_skills
+        if ATSScorer.matches_spec(base_resume_text, spec)
+    }
+    score_before, score_current, matched_skills, missing_skills = ATSScorer.evaluate(
+        base_resume_text=base_resume_text,
+        jd_skills=payload.jd_skills,
+        approved_replacements=replacements,
+        fallback_before=payload.fallback_score_before,
+        fallback_after=payload.fallback_score_estimated,
+    )
+    gained_skills = [
+        skill for skill in matched_skills if skill not in matched_before
+    ]
+    scoring_mode = "keyword_coverage" if payload.jd_skills else "model_estimate"
+
+    logger.info(
+        "[ATS SCORE] mode=%s | skills=%d | edits=%d | score=%d%%->%d%%",
+        scoring_mode,
+        len(payload.jd_skills),
+        len(replacements),
+        score_before,
+        score_current,
+    )
+    return ATSScoreResponse(
+        ats_score_before=score_before,
+        ats_score_current=score_current,
+        matched_skills=matched_skills,
+        gained_skills=gained_skills,
+        missing_skills=missing_skills,
+        scoring_mode=scoring_mode,
+    )
 
 
 @router.post("/analyze", response_model=AnalyzeResumeResponse)
